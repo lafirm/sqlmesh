@@ -4,9 +4,9 @@ import typing as t
 from sqlglot import exp
 from pathlib import Path
 
+from sqlmesh.core.engine_adapter.base import MERGE_SOURCE_ALIAS, MERGE_TARGET_ALIAS
 from sqlmesh.core.engine_adapter.mixins import (
     GetCurrentCatalogFromFunctionMixin,
-    LogicalMergeMixin,
     RowDiffMixin,
 )
 from sqlmesh.core.engine_adapter.shared import (
@@ -22,11 +22,11 @@ from sqlmesh.core.schema_diff import SchemaDiffer
 
 if t.TYPE_CHECKING:
     from sqlmesh.core._typing import SchemaName, TableName
-    from sqlmesh.core.engine_adapter._typing import DF
+    from sqlmesh.core.engine_adapter._typing import DF, Query
 
 
 @set_catalog(override_mapping={"_get_data_objects": CatalogSupport.REQUIRES_SET_CATALOG})
-class DuckDBEngineAdapter(LogicalMergeMixin, GetCurrentCatalogFromFunctionMixin, RowDiffMixin):
+class DuckDBEngineAdapter(GetCurrentCatalogFromFunctionMixin, RowDiffMixin):
     DIALECT = "duckdb"
     SUPPORTS_TRANSACTIONS = False
     SCHEMA_DIFFER = SchemaDiffer(
@@ -195,3 +195,35 @@ class DuckDBEngineAdapter(LogicalMergeMixin, GetCurrentCatalogFromFunctionMixin,
                 expr.sql(dialect=self.dialect) for expr in partitioned_by_exps
             )
             self.execute(f"ALTER TABLE {table_name_str} SET PARTITIONED BY ({partitioned_by_str});")
+
+    def _merge(
+        self,
+        target_table: TableName,
+        query: Query,
+        on: exp.Expression,
+        whens: exp.Whens,
+    ) -> None:
+        """DuckDB doesn't support MERGE but UPSERT, so convert MERGE to INSERT."""
+        # Binder Error: There are no UNIQUE/PRIMARY KEY Indexes that refer to this table, ON CONFLICT is a no-op
+        # TODO(Lafir): Handle more than one col here
+        idx_col = on.left.this.this if hasattr(on.left.this, "this") else on.left.this
+        idx_name = f"tmp_merge_idx"
+        schema = str(target_table).split(".")[1]
+        self.execute(f"DROP INDEX IF EXISTS {schema}.{idx_name};")
+        # TODO(Lafir): Throws error if not unique?
+        idx_sql = f"CREATE UNIQUE INDEX {idx_name} ON {target_table} ({idx_col});"
+        self.execute(idx_sql)
+        target_table_exp = exp.to_table(target_table)
+        insert_exp = exp.Insert(this=target_table_exp, expression=query)
+        insert_sql = insert_exp.sql(dialect=self.dialect)
+        when_matched_expr = [str(when) for when in whens.expressions if when.args["matched"]]
+        if len(when_matched_expr) != 1:
+            raise ValueError("More than one when_matched_expr")
+        on_conflict_expr = (
+            when_matched_expr[0]
+            .replace("WHEN MATCHED THEN", "ON CONFLICT DO")
+            .replace(f"{MERGE_SOURCE_ALIAS}.", "EXCLUDED.")
+            .replace(f"{MERGE_TARGET_ALIAS}.", "")
+        )
+        upsert_sql = insert_sql + " " + on_conflict_expr
+        self.execute(upsert_sql)
