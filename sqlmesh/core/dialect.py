@@ -1096,8 +1096,9 @@ def extend_sqlglot() -> None:
                     DColonCast: lambda self, e: f"{self.sql(e, 'this')}::{self.sql(e, 'to')}",
                     Jinja: lambda self, e: e.name,
                     JinjaQuery: lambda self, e: f"{JINJA_QUERY_BEGIN};\n{e.name}\n{JINJA_END};",
-                    JinjaStatement: lambda self,
-                    e: f"{JINJA_STATEMENT_BEGIN};\n{e.name}\n{JINJA_END};",
+                    JinjaStatement: lambda self, e: (
+                        f"{JINJA_STATEMENT_BEGIN};\n{e.name}\n{JINJA_END};"
+                    ),
                     VirtualUpdateStatement: lambda self, e: _on_virtual_update_sql(self, e),
                     MacroDef: lambda self, e: f"@DEF({self.sql(e.this)}, {self.sql(e.expression)})",
                     MacroFunc: _macro_func_sql,

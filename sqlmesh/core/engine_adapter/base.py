@@ -300,8 +300,8 @@ class EngineAdapter:
                         )
                         for c in target_columns_to_types
                     ]
-                    query_factory = (
-                        lambda: exp.Select()
+                    query_factory = lambda: (
+                        exp.Select()
                         .select(*select_columns)
                         .from_(query_or_df.subquery("select_source_columns"))
                     )
